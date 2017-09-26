@@ -1,6 +1,6 @@
 import os, configparser, requests, json
 
-os.environ['INTERFACE_CONF_FILE'] = '/home/jjorissen/interface_secrets.conf'
+# os.environ['INTERFACE_CONF_FILE'] = '/home/jjorissen/interface_secrets.conf'
 SECRETS_LOCATION = os.environ.get('INTERFACE_CONF_FILE')
 SECRETS_LOCATION = os.path.abspath(SECRETS_LOCATION) if SECRETS_LOCATION else 'apprest.conf'
 
