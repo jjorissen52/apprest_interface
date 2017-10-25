@@ -1,3 +1,6 @@
 # Created by .ignore support plugin (hsz.mobi)
+dist/
+apprest_interface.egg-info/
+
 *.xlsx
 .ipynb_checkpoints

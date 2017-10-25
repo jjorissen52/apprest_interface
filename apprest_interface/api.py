@@ -96,3 +96,9 @@ class APPRestConnection:
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
         response = requests.delete(f'{self.endpoint}/{entity}/{entity_id}', **request_kwargs)
         return self._handle_status_code(response)
+
+    def entity_info(self, entity, **kwargs):
+        entity = self._format_entity(entity)
+        request_kwargs = {"headers": self.headers,}
+        response = requests.get(f'{self.endpoint}/model_info/{entity}/')
+        return self._handle_status_code(response)
