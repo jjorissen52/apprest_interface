@@ -1,6 +1,6 @@
-import os, configparser, requests, json, http
+import os, configparser, requests, json, http, ast, subprocess
 
-# os.environ['INTERFACE_CONF_FILE'] = '/home/jjorissen/interface_secrets.conf'
+
 SECRETS_LOCATION = os.environ.get('INTERFACE_CONF_FILE')
 SECRETS_LOCATION = os.path.abspath(SECRETS_LOCATION) if SECRETS_LOCATION else 'apprest.conf'
 
@@ -40,6 +40,7 @@ class APPRestConnection:
             'Authorization': f'Token {self.auth_token}'
         }
 
+
     def _handle_status_code(self, response):
         if response.status_code == 200:
             return json.loads(response.text)
@@ -67,11 +68,14 @@ class APPRestConnection:
             entity = entity.lower()
         return entity
 
-    def all(self, entity):
-        entity = self._format_entity(entity)
-        request_kwargs = {"headers": self.headers}
-        response = requests.get(f'{self.endpoint}/{entity}/', **request_kwargs)
-        return self._handle_status_code(response)
+    def all(self, entities):
+        all_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'all.py')
+        call_string = f"python {all_file} {' '.join(entities)}"
+        proc = subprocess.Popen(call_string, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        response = ast.literal_eval(proc.communicate()[0].decode('utf-8'))
+        for i, item in enumerate(response):
+            response[i] = ast.literal_eval(item)
+        return response
 
     def search(self, entity, term):
         if not term:
@@ -92,15 +96,20 @@ class APPRestConnection:
         response = self._handle_status_code(response)
         return response
 
-    def add(self, entity, **kwargs):
+    def add(self, entity, data):
+        add_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'add.py')
         entity = self._format_entity(entity)
-        request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
-        response = requests.post(f'{self.endpoint}/{entity}/', **request_kwargs)
-        response = self._handle_status_code(response)
-        if 'id' not in list(response.keys()):
-            # happens when the rest api did not create the object for whatever reason.
-            raise APICallError(f'{response}')
-        return response
+        request_kwargs_list = [json.dumps({'headers': self.headers, 'data': json.dumps(datum)}) for datum in data]
+        # print(request_kwargs_list)
+        call_string = f"python {add_file} {entity} -k '{','.join(request_kwargs_list)}'"
+        if len(call_string) > 32767:
+            raise APICallError('Could not pass so many characters. Please break into smaller requests. '
+                               f'{len(call_string)/32767} times the character limit')
+        proc = subprocess.Popen(call_string, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        responses = ast.literal_eval(proc.communicate()[0].decode('utf-8'))
+        for i, response in enumerate(responses):
+            responses[i] = json.loads(response)
+        return responses
 
     def get_or_error(self, entity, **kwargs):
         response = self.query(entity, **kwargs)
@@ -115,7 +124,7 @@ class APPRestConnection:
         if len(response) > 1:
             raise APICallError(f'{len(response)} records match the provided query. Exactly 1 required for get request.')
         elif len(response) == 0:
-            response, created = self.add(entity, **kwargs), True
+            response, created = self.add('doctor', **kwargs), True
         else:
             response, created = response[0], False
 
