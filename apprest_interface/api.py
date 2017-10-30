@@ -109,18 +109,24 @@ class APPRestConnection:
         pages, count = [], 0
         if 'results' not in list(paginated_response.keys()) or 'count' not in list(paginated_response.keys()):
             if issubclass(paginated_response.__class__, dict):
-                pages.append(paginated_response)
+                pages.extend(paginated_response)
             else:
                 raise APICallError('This is not a properly paginated response.')
         if 'results' in list(paginated_response.keys()):
             pages.extend(paginated_response['results'])
         if 'count' in list(paginated_response.keys()):
             count = paginated_response['count']
+        next_page = paginated_response
         while len(pages) < count:
-            next_page = self.page(paginated_response)
+            next_page = self.page(next_page)
             if next_page:
                 if 'results' in list(next_page.keys()):
                     pages.extend(next_page['results'])
+            else:
+                if len(pages) != len(count):
+                    raise APICallError('Something went wrong during de-pagination; the number of de-paginated results '
+                                       'was less than the expected number of results. Be sure that you always start '
+                                       'de_page at the FIRST page of any paginated query results.')
 
         return pages
 
