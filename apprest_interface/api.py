@@ -8,6 +8,8 @@ config = configparser.ConfigParser()
 config.read(SECRETS_LOCATION)
 
 ENDPOINT = config.get('app_rest', 'endpoint')
+
+# ENDPOINT = 'http://127.0.0.1:8000'
 USERNAME = config.get('app_rest', 'username')
 PASSWORD = config.get('app_rest', 'password')
 
@@ -83,41 +85,71 @@ class APPRestConnection:
         response = self._handle_status_code(response)
         return response
 
-    def query(self, entity, **kwargs):
-        if not kwargs:
-            raise APICallError('Query terms must be specified.')
-        entity = self._format_entity(entity)
+    def query(self, entity=None, url=None, **kwargs):
         request_kwargs = {"headers": self.headers, "params": kwargs}
-        response = requests.get(f'{self.endpoint}/{entity}?', **request_kwargs)
-        response = self._handle_status_code(response)
-        return response
+        if url:
+            response = requests.get(url, **request_kwargs)
+        elif entity and kwargs:
+            entity = self._format_entity(entity)
+            response = requests.get(f'{self.endpoint}/{entity}?', **request_kwargs)
+        else:
+            raise APICallError('entity and Query terms must be specified.')
+        return self._handle_status_code(response)
+
+    def page(self, paginated_response, page='next'):
+        request_kwargs = {"headers": self.headers}
+        if page in list(paginated_response.keys()) and paginated_response[page]:
+            url = paginated_response[page]
+        else:
+            return False
+        response = requests.get(url, **request_kwargs)
+        return self._handle_status_code(response)
+
+    def de_paginate(self, paginated_response):
+        pages, count = [], 0
+        if 'results' not in list(paginated_response.keys()) or 'count' not in list(paginated_response.keys()):
+            if issubclass(paginated_response.__class__, dict):
+                pages.append(paginated_response)
+            else:
+                raise APICallError('This is not a properly paginated response.')
+        if 'results' in list(paginated_response.keys()):
+            pages.extend(paginated_response['results'])
+        if 'count' in list(paginated_response.keys()):
+            count = paginated_response['count']
+        while len(pages) < count:
+            next_page = self.page(paginated_response)
+            if next_page:
+                if 'results' in list(next_page.keys()):
+                    pages.extend(next_page['results'])
+
+        return pages
 
     def add(self, entity, **kwargs):
         entity = self._format_entity(entity)
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
         response = requests.post(f'{self.endpoint}/{entity}/', **request_kwargs)
         response = self._handle_status_code(response)
-        if 'id' not in list(response.keys()):
+        if 'url' not in list(response.keys()):
             # happens when the rest api did not create the object for whatever reason.
             raise APICallError(f'{response}')
         return response
 
     def get_or_error(self, entity, **kwargs):
         response = self.query(entity, **kwargs)
-        if len(response) != 1:
+        if 'count' not in response.keys() or response['count'] != 1:
             query_summary = '\n'.join([f'"{key}": "{value}"' for key, value in kwargs.items()])
             query_summary = f'({entity}={{{query_summary}}})'
             raise APICallError(f'{len(response)} records match {query_summary}. Exactly 1 required for get request.')
-        return response[0]
+        return response['results']
 
     def get_or_create(self, entity, **kwargs):
         response = self.query(entity, **kwargs)
-        if len(response) > 1:
+        if 'count' not in response.keys() or response['count'] > 1:
             raise APICallError(f'{len(response)} records match the provided query. Exactly 1 required for get request.')
-        elif len(response) == 0:
+        elif 'count' not in response.keys() or response['count'] == 0:
             response, created = self.add(entity, **kwargs), True
         else:
-            response, created = response[0], False
+            response, created = response['results'][0], False
 
         return response, created
 
@@ -132,16 +164,26 @@ class APPRestConnection:
         response = self._handle_status_code(response)
         return response
 
-    def edit(self, entity, entity_id, **kwargs):
-        entity = self._format_entity(entity)
+    def edit(self, entity=None, entity_id=None, url=None, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
-        response = requests.put(f'{self.endpoint}/{entity}/{entity_id}/', **request_kwargs)
+        if url:
+            response = requests.put(url, **request_kwargs)
+        elif entity and entity_id:
+            entity = self._format_entity(entity)
+            response = requests.put(f'{self.endpoint}/{entity}/{entity_id}/', **request_kwargs)
+        else:
+            raise APICallError('entity and entity_id or fully qualified url to resource must be provided.')
         return self._handle_status_code(response)
 
-    def delete(self, entity, entity_id, **kwargs):
-        entity = self._format_entity(entity)
+    def delete(self, entity=None, entity_id=None, url=None, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
-        response = requests.delete(f'{self.endpoint}/{entity}/{entity_id}', **request_kwargs)
+        if url:
+            response = requests.delete(url, **request_kwargs)
+        elif entity and entity_id:
+            entity = self._format_entity(entity)
+            response = requests.delete(f'{self.endpoint}/{entity}/{entity_id}', **request_kwargs)
+        else:
+            raise APICallError('entity and entity_id or fully qualified url to resource must be provided.')
         return self._handle_status_code(response)
 
     def entity_info(self, entity=None, **kwargs):
