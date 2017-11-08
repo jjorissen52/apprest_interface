@@ -1,6 +1,8 @@
 import inspect
-import os, configparser, requests, json, http, logging, time
+import os, configparser, requests, json, http, logging, time, datetime
 from functools import wraps
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 # os.environ['INTERFACE_CONF_FILE'] = '/home/jjorissen/interface_secrets.conf'
 SECRETS_LOCATION = os.environ.get('INTERFACE_CONF_FILE')
@@ -10,13 +12,21 @@ config = configparser.ConfigParser()
 config.read(SECRETS_LOCATION)
 
 ENDPOINT = config.get('app_rest', 'endpoint')
-
-# ENDPOINT = 'http://127.0.0.1:8000'
 USERNAME = config.get('app_rest', 'username')
 PASSWORD = config.get('app_rest', 'password')
-LOG_LOCATION = config.get('app_rest', 'log_location')
-logging.basicConfig(filename=os.path.abspath(LOG_LOCATION), filemode='w')
 
+# SETUP LOGGING
+LOG_LOCATION = config.get('app_rest', 'log_location')
+logging.basicConfig(filename=os.path.abspath(LOG_LOCATION), filemode='w', level=logging.INFO)
+
+# SETUP REQUESTS TIMNEOUT RETRIES
+s = requests.Session()
+
+retries = Retry(total=5,
+                backoff_factor=0.1,
+                status_forcelist=[ 500, 502, 503, 504])
+
+s.mount(ENDPOINT, HTTPAdapter(max_retries=retries))
 
 class ConnectionError(BaseException):
     pass
@@ -33,11 +43,12 @@ def handle_response(method):
         error, caller, entity, entity_id, url = method_kwargs.pop('error', None), method.__name__, method_args[0], method_kwargs.pop('entity_id', None), method_kwargs.pop('url', None)
         _kwargs = method_kwargs
         if response.status_code >= 400 and self.logging:
-            logging.error(f'[{time.time()}] {url} {self.username}{" Passive Fail " if not error else ""}{caller} {entity}'
+            logging.error(f'[{datetime.datetime.now().isoformat()}] {url if url else ""} {self.username}'
+                          f'{" passive fail " if not error else ""}{caller} {entity}'
                           f' {response.status_code} {response.text if hasattr(response, "text") else ""} {_kwargs}')
         elif self.logging:
             logging.info(
-                f'[{time.time()}] {url} {self.username}{" Passive Fail " if not error else ""}{caller} {entity}'
+                f'[{datetime.datetime.now().isoformat()}] {url if url else ""} {self.username} {caller} {entity}'
                 f' {response.status_code} {response.text if hasattr(response, "text") else ""} {_kwargs}')
         if response.status_code == 200:
             return json.loads(response.text)
@@ -93,17 +104,18 @@ class APPRestConnection:
     username = USERNAME
     password = PASSWORD
 
-    def __init__(self, logging=False, **kwargs):
+    def __init__(self, logging=False, global_timeout=3, **kwargs):
         # allows user to set custom endpoint and login creds
         for key, value in kwargs.items():
             if (key in ['endpoint', 'username', 'password']) and not value:
                 kwargs[key] = self.__getattribute__(key)
         self.logging = logging
+        self.global_timeout = global_timeout
         self._authenticate()
 
     def _authenticate(self):
         params = {"username": self.username, "password": self.password}
-        response = requests.post(f'{self.endpoint}/api/auth/login/', auth=requests.auth.HTTPBasicAuth(**params))
+        response = s.post(f'{self.endpoint}/api/auth/login/', timeout=self.global_timeout, auth=requests.auth.HTTPBasicAuth(**params))
         response_dict = json.loads(response.text)
         if 'token' not in response_dict.keys():
             raise ConnectionError('Could not establish a connection to the API. Please check your credentials.')
@@ -120,7 +132,7 @@ class APPRestConnection:
     def all(self, entity, error=False):
         request_kwargs = {"headers": self.headers}
         url = f'{self.endpoint}/{entity}/'
-        response = requests.get(url, **request_kwargs)
+        response = s.get(url, timeout=self.global_timeout, **request_kwargs)
         return response
 
     @prepare_request
@@ -130,7 +142,7 @@ class APPRestConnection:
             raise APICallError('Search term must be specified.')
         request_kwargs = {"headers": self.headers, "params": {"search": term}}
         url = f'{self.endpoint}/{entity}?'
-        response = requests.get(url, **request_kwargs)
+        response = s.get(url, timeout=self.global_timeout, **request_kwargs)
         # response_dict = json.loads(response.text)
         # response = self._handle_status_code(response, caller='search', entity=entity, url=url, _kwargs={"term": term})
         return response
@@ -140,15 +152,14 @@ class APPRestConnection:
     def query(self, entity=None, url=None, error=False, **kwargs):
         request_kwargs = {"headers": self.headers, "params": kwargs}
         if url:
-            response = requests.get(url, **request_kwargs)
+            response = s.get(url, timeout=self.global_timeout, **request_kwargs)
         elif entity and kwargs:
             url = f'{self.endpoint}/{entity}?'
-            response = requests.get(url, **request_kwargs)
+            response = s.get(url, timeout=self.global_timeout, **request_kwargs)
         else:
             raise APICallError('entity and Query terms must be specified.')
         return response
 
-    @prepare_request
     @handle_response
     def page(self, paginated_response, error=False, page='next'):
         request_kwargs = {"headers": self.headers}
@@ -156,7 +167,7 @@ class APPRestConnection:
             url = paginated_response[page]
         else:
             return False
-        response = requests.get(url, **request_kwargs)
+        response = s.get(url, timeout=self.global_timeout, **request_kwargs)
         return response
 
     def de_paginate(self, paginated_response):
@@ -188,7 +199,7 @@ class APPRestConnection:
     @handle_response
     def add(self, entity, error=False, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
-        response = requests.post(f'{self.endpoint}/{entity}/', **request_kwargs)
+        response = s.post(f'{self.endpoint}/{entity}/', timeout=self.global_timeout, **request_kwargs)
         return response
 
     def get_or_error(self, entity, **kwargs):
@@ -218,7 +229,7 @@ class APPRestConnection:
             headers = {**self.headers}
             headers.pop('Content-Type')
             request_kwargs = {"headers": headers, "files": files, "data": kwargs}
-            response = requests.post(f'{self.endpoint}/{entity}/', **request_kwargs)
+            response = s.post(f'{self.endpoint}/{entity}/', timeout=self.global_timeout, **request_kwargs)
         return response
 
     @prepare_request
@@ -226,10 +237,10 @@ class APPRestConnection:
     def edit(self, entity=None, entity_id=None, url=None, error=False, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
         if url:
-            response = requests.put(url, **request_kwargs)
+            response = s.put(url, timeout=self.global_timeout, **request_kwargs)
         elif entity and entity_id:
             url = f'{self.endpoint}/{entity}/{entity_id}/'
-            response = requests.put(url, **request_kwargs)
+            response = s.put(url, timeout=self.global_timeout, **request_kwargs)
         else:
             raise APICallError('entity and entity_id or fully qualified url to resource must be provided.')
         return response
@@ -239,10 +250,10 @@ class APPRestConnection:
     def delete(self, entity=None, entity_id=None, url=None, error=False, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
         if url:
-            response = requests.delete(url, **request_kwargs)
+            response = s.delete(url, timeout=self.global_timeout, **request_kwargs)
         elif entity and entity_id:
             url = f'{self.endpoint}/{entity}/{entity_id}'
-            response = requests.delete(url, **request_kwargs)
+            response = s.delete(url, timeout=self.global_timeout, **request_kwargs)
         else:
             raise APICallError('entity and entity_id or fully qualified url to resource must be provided.')
         return response
@@ -252,5 +263,5 @@ class APPRestConnection:
     def entity_info(self, entity=None, error=False, **kwargs):
         request_kwargs = {"headers": self.headers,}
         uri = f'{self.endpoint}/model_info/{entity}/' if entity else f'{self.endpoint}/model_info/'
-        response = requests.get(uri, **request_kwargs)
+        response = s.get(uri, timeout=self.global_timeout, **request_kwargs)
         return response
