@@ -17,7 +17,7 @@ PASSWORD = config.get('app_rest', 'password')
 
 # SETUP LOGGING
 LOG_LOCATION = config.get('app_rest', 'log_location')
-logging.basicConfig(filename=os.path.abspath(LOG_LOCATION), filemode='w', level=logging.INFO)
+# logging.basicConfig(filename=os.path.abspath(LOG_LOCATION), filemode='w', level=logging.INFO)
 
 # SETUP REQUESTS TIMNEOUT RETRIES
 s = requests.Session()
