@@ -5,4 +5,4 @@ apprest_interface.egg-info/
 *.xlsx
 .ipynb_checkpoints
 *.ipynb
-!README.ipynb
+!Documentation.ipynb
