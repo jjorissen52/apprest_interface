@@ -16,7 +16,7 @@ USERNAME = config.get('app_rest', 'username')
 PASSWORD = config.get('app_rest', 'password')
 
 # SETUP LOGGING
-LOG_LOCATION = config.get('app_rest', 'log_location')
+# LOG_LOCATION = config.get('app_rest', 'log_location')
 # logging.basicConfig(filename=os.path.abspath(LOG_LOCATION), filemode='w', level=logging.INFO)
 
 # SETUP REQUESTS TIMNEOUT RETRIES
@@ -40,9 +40,13 @@ def handle_response(method):
     @wraps(method)
     def response_wrapper(self, *method_args, **method_kwargs):
         response = method(self, *method_args, **method_kwargs)
-        error, caller, entity, entity_id, url = method_kwargs.pop('error', None), method.__name__, method_args[0], method_kwargs.pop('entity_id', None), method_kwargs.pop('url', None)
+        if method_args:
+            entity = method_args[0]
+        else:
+            entity = method_kwargs.get('entity')
+        error, caller, entity_id, url = method_kwargs.pop('error', None), method.__name__, method_kwargs.pop('entity_id', None), method_kwargs.pop('url', None)
         _kwargs = method_kwargs
-        if response.status_code >= 400 and self.logging:
+        if response.status_code >= 400:
             logging.error(f'[{datetime.datetime.now().isoformat()}] {url if url else ""} {self.username}'
                           f'{" passive fail " if not error else ""}{caller} {entity}'
                           f' {response.status_code} {response.text if hasattr(response, "text") else ""} {_kwargs}')
@@ -202,17 +206,20 @@ class APPRestConnection:
         response = s.post(f'{self.endpoint}/{entity}/', timeout=self.global_timeout, **request_kwargs)
         return response
 
-    def get_or_error(self, entity, **kwargs):
-        response = self.query(entity, **kwargs)
-        if 'count' not in response.keys() or response['count'] != 1:
+    def get_or_error(self, entity=None, url=None, **kwargs):
+        response = self.query(entity, url=url,  **kwargs)
+        if 'count' in response.keys() and response['count'] != 1:
             query_summary = '\n'.join([f'"{key}": "{value}"' for key, value in kwargs.items()])
             query_summary = f'({entity}={{{query_summary}}})'
-            raise APICallError(f'{len(response)} records match {query_summary}. Exactly 1 required for get request.')
-        return response['results']
+            raise APICallError(f'{response["count"]} records match {query_summary}. Exactly 1 required for get request.')
+        elif 'count' in response.keys() and response['count'] == 1:
+            return response['results']
+        else:
+            raise APICallError(f'An unknown error occurred during the handling of the get_or_error response: {response}.')
 
-    def get_or_create(self, entity, **kwargs):
+    def get_or_create(self, entity=None, **kwargs):
         response = self.query(entity, **kwargs)
-        if 'count' not in response.keys() or response['count'] > 1:
+        if 'count' in response.keys() and response['count'] > 1:
             raise APICallError(f'{len(response)} records match the provided query. Exactly 1 required for get request.')
         elif 'count' not in response.keys() or response['count'] == 0:
             response, created = self.add(entity, **kwargs), True
@@ -221,15 +228,14 @@ class APPRestConnection:
 
         return response, created
 
-    @prepare_request
     @handle_response
-    def add_file(self, entity="files", file=None, error=False, **kwargs):
+    def add_file(self, file=None, error=False, **kwargs):
         with open(file, 'rb') as f:
             files = {"file": f}
             headers = {**self.headers}
             headers.pop('Content-Type')
             request_kwargs = {"headers": headers, "files": files, "data": kwargs}
-            response = s.post(f'{self.endpoint}/{entity}/', timeout=self.global_timeout, **request_kwargs)
+            response = s.post(f'{self.endpoint}/files/', timeout=self.global_timeout, **request_kwargs)
         return response
 
     @prepare_request
@@ -237,10 +243,10 @@ class APPRestConnection:
     def edit(self, entity=None, entity_id=None, url=None, error=False, **kwargs):
         request_kwargs = {"headers": self.headers, "data": json.dumps(kwargs)}
         if url:
-            response = s.put(url, timeout=self.global_timeout, **request_kwargs)
+            response = s.patch(url, timeout=self.global_timeout, **request_kwargs)
         elif entity and entity_id:
             url = f'{self.endpoint}/{entity}/{entity_id}/'
-            response = s.put(url, timeout=self.global_timeout, **request_kwargs)
+            response = s.patch(url, timeout=self.global_timeout, **request_kwargs)
         else:
             raise APICallError('entity and entity_id or fully qualified url to resource must be provided.')
         return response
